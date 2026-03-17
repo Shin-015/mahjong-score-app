@@ -630,15 +630,17 @@ def get_player_stats(player_name=None, start_date=None, end_date=None):
     return fetch_dataframe(query, params)
 
 def get_session_rank_trend(session_id):
-    df = fetch_dataframe(
+    return fetch_dataframe(
         """
         SELECT
-            h.hanchan_no, p.name, hr.rank
+            h.hanchan_no AS 半荘数,
+            p.name AS プレイヤー,
+            hr.rank AS 順位
         FROM hanchan_results hr
         JOIN players p ON hr.player_id = p.id
         JOIN hanchans h ON hr.hanchan_id = h.id
         WHERE h.session_id = :session_id
-        ORDER BY p.name ASC, h.hanchan_no ASC
+        ORDER BY h.hanchan_no ASC, p.name ASC
         """,
         {"session_id": int(session_id)},
     )
@@ -664,7 +666,7 @@ def make_rank_line_chart(rank_trend_df, title):
         fig.add_trace(
             go.Scatter(
                 x=player_df["半荘数"],
-                y=player_df["平均順位"],
+                y=player_df["順位"],
                 mode="lines+markers",
                 name=player,
             )
