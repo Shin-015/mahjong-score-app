@@ -697,7 +697,7 @@ def make_rank_line_chart(rank_trend_df, title):
 
 def page_home():
     st.title("麻雀成績管理サイト")
-    st.write("スマホから入力できる成績管理サイトです。")
+    st.write("ver1")
 
     players_df = get_players()
     rules_df = get_rules()
