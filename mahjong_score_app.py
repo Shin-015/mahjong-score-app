@@ -70,7 +70,7 @@ def init_db():
                 """
                 CREATE TABLE IF NOT EXISTS session_players (
                     id BIGSERIAL PRIMARY KEY,
-                    session_id BIGINT NOT NULL REFERENCES sessions(id),
+                    session_id BIGINT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                     seat_no INTEGER NOT NULL,
                     player_id BIGINT NOT NULL REFERENCES players(id),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -85,7 +85,7 @@ def init_db():
                 """
                 CREATE TABLE IF NOT EXISTS hanchans (
                     id BIGSERIAL PRIMARY KEY,
-                    session_id BIGINT NOT NULL REFERENCES sessions(id),
+                    session_id BIGINT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                     hanchan_no INTEGER NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -98,7 +98,7 @@ def init_db():
                 """
                 CREATE TABLE IF NOT EXISTS hanchan_results (
                     id BIGSERIAL PRIMARY KEY,
-                    hanchan_id BIGINT NOT NULL REFERENCES hanchans(id),
+                    hanchan_id BIGINT NOT NULL REFERENCES hanchans(id) ON DELETE CASCADE,
                     player_id BIGINT NOT NULL REFERENCES players(id),
                     final_score INTEGER NOT NULL,
                     rank INTEGER NOT NULL,
@@ -127,7 +127,10 @@ def add_player(name):
     if not name:
         raise ValueError("プレイヤー名を入力してください。")
     try:
-        execute_query("INSERT INTO players (name) VALUES (:name)", {"name": name})
+        execute_query(
+            "INSERT INTO players (name) VALUES (:name)",
+            {"name": name},
+        )
     except Exception:
         raise ValueError("同じ名前のプレイヤーはすでに登録されています。")
 
@@ -138,7 +141,11 @@ def delete_player(player_id):
 
 def get_players():
     return fetch_dataframe(
-        "SELECT id, name, created_at FROM players ORDER BY LOWER(name) ASC"
+        """
+        SELECT id, name, created_at
+        FROM players
+        ORDER BY LOWER(name) ASC
+        """
     )
 
 
@@ -254,7 +261,10 @@ def update_session(session_id, session_date, rule_id, title, notes):
     execute_query(
         """
         UPDATE sessions
-        SET session_date = :session_date, rule_id = :rule_id, title = :title, notes = :notes
+        SET session_date = :session_date,
+            rule_id = :rule_id,
+            title = :title,
+            notes = :notes
         WHERE id = :session_id
         """,
         {
@@ -268,33 +278,7 @@ def update_session(session_id, session_date, rule_id, title, notes):
 
 
 def delete_session(session_id):
-    engine = get_engine()
-    with engine.begin() as conn:
-        hanchan_ids_df = pd.read_sql(
-            text("SELECT id FROM hanchans WHERE session_id = :session_id"),
-            conn,
-            params={"session_id": int(session_id)},
-        )
-        hanchan_ids = hanchan_ids_df["id"].tolist()
-
-        for hanchan_id in hanchan_ids:
-            conn.execute(
-                text("DELETE FROM hanchan_results WHERE hanchan_id = :hanchan_id"),
-                {"hanchan_id": int(hanchan_id)},
-            )
-
-        conn.execute(
-            text("DELETE FROM hanchans WHERE session_id = :session_id"),
-            {"session_id": int(session_id)},
-        )
-        conn.execute(
-            text("DELETE FROM session_players WHERE session_id = :session_id"),
-            {"session_id": int(session_id)},
-        )
-        conn.execute(
-            text("DELETE FROM sessions WHERE id = :session_id"),
-            {"session_id": int(session_id)},
-        )
+    execute_query("DELETE FROM sessions WHERE id = :session_id", {"session_id": int(session_id)})
 
 
 def get_sessions():
@@ -341,7 +325,11 @@ def get_session_players(session_id):
 
 def get_next_hanchan_no(session_id):
     df = fetch_dataframe(
-        "SELECT COALESCE(MAX(hanchan_no), 0) AS max_no FROM hanchans WHERE session_id = :session_id",
+        """
+        SELECT COALESCE(MAX(hanchan_no), 0) AS max_no
+        FROM hanchans
+        WHERE session_id = :session_id
+        """,
         {"session_id": int(session_id)},
     )
     return int(df.iloc[0]["max_no"]) + 1
@@ -708,7 +696,7 @@ def make_rank_line_chart(rank_trend_df, title):
 
 def page_home():
     st.title("麻雀成績管理サイト")
-    st.write("しん作成　ver.1")
+    st.write("スマホから入力できる成績管理サイトです。")
 
     players_df = get_players()
     rules_df = get_rules()
@@ -950,8 +938,11 @@ def page_session_input():
 
                     for i, fixed_row in fixed_players_df.iterrows():
                         score_key = f"menu_edit_score_{i}"
-                        if score_key not in st.session_state:
-                            st.session_state[score_key] = int(score_map.get(fixed_row["name"], 25000))
+                        current_default = int(score_map.get(fixed_row["name"], 25000))
+                        if st.session_state.get("menu_edit_target") != int(edit_hanchan_no):
+                            st.session_state[score_key] = current_default
+
+                    st.session_state["menu_edit_target"] = int(edit_hanchan_no)
 
                     with st.form("menu_edit_hanchan_form"):
                         edit_scores = []
@@ -1012,8 +1003,6 @@ def page_session_input():
                         if menu_save_submitted:
                             update_hanchan_result(int(target_session_id), int(edit_hanchan_no), edit_scores)
                             st.success("半荘結果を修正しました。")
-                            for i in range(4):
-                                st.session_state[f"menu_edit_score_{i}"] = 25000
                             st.rerun()
 
                         if menu_close:
