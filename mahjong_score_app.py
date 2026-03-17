@@ -1,122 +1,125 @@
-import sqlite3
-from contextlib import closing
 from datetime import date
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from sqlalchemy import create_engine, text
 
-DB_PATH = "mahjong_data.db"
+DATABASE_URL = st.secrets["DATABASE_URL"]
 
 
-def get_connection():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+@st.cache_resource
+def get_engine():
+    return create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
 def init_db():
-    with closing(get_connection()) as conn:
-        cur = conn.cursor()
-
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS players (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS players (
+                    id BIGSERIAL PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
             )
-            """
         )
 
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS rules (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                rule_name TEXT NOT NULL UNIQUE,
-                player_count INTEGER NOT NULL DEFAULT 4,
-                starting_points INTEGER NOT NULL,
-                return_points INTEGER NOT NULL,
-                oka REAL NOT NULL DEFAULT 0,
-                uma_1 REAL NOT NULL DEFAULT 0,
-                uma_2 REAL NOT NULL DEFAULT 0,
-                uma_3 REAL NOT NULL DEFAULT 0,
-                uma_4 REAL NOT NULL DEFAULT 0,
-                has_hakoshita INTEGER NOT NULL DEFAULT 0,
-                notes TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS rules (
+                    id BIGSERIAL PRIMARY KEY,
+                    rule_name TEXT NOT NULL UNIQUE,
+                    player_count INTEGER NOT NULL DEFAULT 4,
+                    starting_points INTEGER NOT NULL,
+                    return_points INTEGER NOT NULL,
+                    oka DOUBLE PRECISION NOT NULL DEFAULT 0,
+                    uma_1 DOUBLE PRECISION NOT NULL DEFAULT 0,
+                    uma_2 DOUBLE PRECISION NOT NULL DEFAULT 0,
+                    uma_3 DOUBLE PRECISION NOT NULL DEFAULT 0,
+                    uma_4 DOUBLE PRECISION NOT NULL DEFAULT 0,
+                    has_hakoshita INTEGER NOT NULL DEFAULT 0,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
             )
-            """
         )
 
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_date TEXT NOT NULL,
-                rule_id INTEGER NOT NULL,
-                title TEXT,
-                notes TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (rule_id) REFERENCES rules (id)
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id BIGSERIAL PRIMARY KEY,
+                    session_date TEXT NOT NULL,
+                    rule_id BIGINT NOT NULL REFERENCES rules(id),
+                    title TEXT,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
             )
-            """
         )
 
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS session_players (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                seat_no INTEGER NOT NULL,
-                player_id INTEGER NOT NULL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES sessions (id),
-                FOREIGN KEY (player_id) REFERENCES players (id),
-                UNIQUE(session_id, seat_no)
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS session_players (
+                    id BIGSERIAL PRIMARY KEY,
+                    session_id BIGINT NOT NULL REFERENCES sessions(id),
+                    seat_no INTEGER NOT NULL,
+                    player_id BIGINT NOT NULL REFERENCES players(id),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(session_id, seat_no)
+                )
+                """
             )
-            """
         )
 
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS hanchans (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                hanchan_no INTEGER NOT NULL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES sessions (id)
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS hanchans (
+                    id BIGSERIAL PRIMARY KEY,
+                    session_id BIGINT NOT NULL REFERENCES sessions(id),
+                    hanchan_no INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
             )
-            """
         )
 
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS hanchan_results (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                hanchan_id INTEGER NOT NULL,
-                player_id INTEGER NOT NULL,
-                final_score INTEGER NOT NULL,
-                rank INTEGER NOT NULL,
-                settlement REAL NOT NULL,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (hanchan_id) REFERENCES hanchans (id),
-                FOREIGN KEY (player_id) REFERENCES players (id)
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS hanchan_results (
+                    id BIGSERIAL PRIMARY KEY,
+                    hanchan_id BIGINT NOT NULL REFERENCES hanchans(id),
+                    player_id BIGINT NOT NULL REFERENCES players(id),
+                    final_score INTEGER NOT NULL,
+                    rank INTEGER NOT NULL,
+                    settlement DOUBLE PRECISION NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+                """
             )
-            """
         )
 
-        conn.commit()
+
+def fetch_dataframe(query, params=None):
+    engine = get_engine()
+    with engine.connect() as conn:
+        return pd.read_sql(text(query), conn, params=params or {})
 
 
-def fetch_dataframe(query, params=()):
-    with closing(get_connection()) as conn:
-        return pd.read_sql_query(query, conn, params=params)
-
-
-def execute_query(query, params=()):
-    with closing(get_connection()) as conn:
-        cur = conn.cursor()
-        cur.execute(query, params)
-        conn.commit()
+def execute_query(query, params=None):
+    engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text(query), params or {})
 
 
 def add_player(name):
@@ -124,18 +127,18 @@ def add_player(name):
     if not name:
         raise ValueError("プレイヤー名を入力してください。")
     try:
-        execute_query("INSERT INTO players (name) VALUES (?)", (name,))
-    except sqlite3.IntegrityError:
+        execute_query("INSERT INTO players (name) VALUES (:name)", {"name": name})
+    except Exception:
         raise ValueError("同じ名前のプレイヤーはすでに登録されています。")
 
 
 def delete_player(player_id):
-    execute_query("DELETE FROM players WHERE id = ?", (player_id,))
+    execute_query("DELETE FROM players WHERE id = :id", {"id": int(player_id)})
 
 
 def get_players():
     return fetch_dataframe(
-        "SELECT id, name, created_at FROM players ORDER BY name COLLATE NOCASE ASC"
+        "SELECT id, name, created_at FROM players ORDER BY LOWER(name) ASC"
     )
 
 
@@ -162,23 +165,26 @@ def add_rule(
                 rule_name, player_count, starting_points, return_points,
                 oka, uma_1, uma_2, uma_3, uma_4, has_hakoshita, notes
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (
+                :rule_name, :player_count, :starting_points, :return_points,
+                :oka, :uma_1, :uma_2, :uma_3, :uma_4, :has_hakoshita, :notes
+            )
             """,
-            (
-                rule_name,
-                player_count,
-                starting_points,
-                return_points,
-                oka,
-                uma_1,
-                uma_2,
-                uma_3,
-                uma_4,
-                int(has_hakoshita),
-                notes.strip(),
-            ),
+            {
+                "rule_name": rule_name,
+                "player_count": int(player_count),
+                "starting_points": int(starting_points),
+                "return_points": int(return_points),
+                "oka": float(oka),
+                "uma_1": float(uma_1),
+                "uma_2": float(uma_2),
+                "uma_3": float(uma_3),
+                "uma_4": float(uma_4),
+                "has_hakoshita": int(has_hakoshita),
+                "notes": notes.strip(),
+            },
         )
-    except sqlite3.IntegrityError:
+    except Exception:
         raise ValueError("同じ名前のルールはすでに登録されています。")
 
 
@@ -196,34 +202,51 @@ def get_rules():
 
 def delete_rule(rule_id):
     session_count_df = fetch_dataframe(
-        "SELECT COUNT(*) AS cnt FROM sessions WHERE rule_id = ?",
-        (rule_id,),
+        "SELECT COUNT(*) AS cnt FROM sessions WHERE rule_id = :rule_id",
+        {"rule_id": int(rule_id)},
     )
     if int(session_count_df.iloc[0]["cnt"]) > 0:
         raise ValueError("このルールを使っている対局データがあるため削除できません。")
-    execute_query("DELETE FROM rules WHERE id = ?", (rule_id,))
+    execute_query("DELETE FROM rules WHERE id = :id", {"id": int(rule_id)})
 
 
 def create_session(session_date, rule_id, title, notes, player_ids):
     if len(player_ids) != 4 or len(set(player_ids)) != 4:
         raise ValueError("参加者4人を重複なく選んでください。")
 
-    with closing(get_connection()) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO sessions (session_date, rule_id, title, notes)
-            VALUES (?, ?, ?, ?)
-            """,
-            (session_date, rule_id, title.strip(), notes.strip()),
+    engine = get_engine()
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                INSERT INTO sessions (session_date, rule_id, title, notes)
+                VALUES (:session_date, :rule_id, :title, :notes)
+                RETURNING id
+                """
+            ),
+            {
+                "session_date": session_date,
+                "rule_id": int(rule_id),
+                "title": title.strip(),
+                "notes": notes.strip(),
+            },
         )
-        session_id = cur.lastrowid
+        session_id = int(result.scalar_one())
+
         for i, player_id in enumerate(player_ids, start=1):
-            cur.execute(
-                "INSERT INTO session_players (session_id, seat_no, player_id) VALUES (?, ?, ?)",
-                (session_id, i, int(player_id)),
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO session_players (session_id, seat_no, player_id)
+                    VALUES (:session_id, :seat_no, :player_id)
+                    """
+                ),
+                {
+                    "session_id": session_id,
+                    "seat_no": i,
+                    "player_id": int(player_id),
+                },
             )
-        conn.commit()
     return session_id
 
 
@@ -231,24 +254,47 @@ def update_session(session_id, session_date, rule_id, title, notes):
     execute_query(
         """
         UPDATE sessions
-        SET session_date = ?, rule_id = ?, title = ?, notes = ?
-        WHERE id = ?
+        SET session_date = :session_date, rule_id = :rule_id, title = :title, notes = :notes
+        WHERE id = :session_id
         """,
-        (session_date, rule_id, title.strip(), notes.strip(), session_id),
+        {
+            "session_date": session_date,
+            "rule_id": int(rule_id),
+            "title": title.strip(),
+            "notes": notes.strip(),
+            "session_id": int(session_id),
+        },
     )
 
 
 def delete_session(session_id):
-    with closing(get_connection()) as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT id FROM hanchans WHERE session_id = ?", (session_id,))
-        hanchan_ids = [row[0] for row in cur.fetchall()]
+    engine = get_engine()
+    with engine.begin() as conn:
+        hanchan_ids_df = pd.read_sql(
+            text("SELECT id FROM hanchans WHERE session_id = :session_id"),
+            conn,
+            params={"session_id": int(session_id)},
+        )
+        hanchan_ids = hanchan_ids_df["id"].tolist()
+
         for hanchan_id in hanchan_ids:
-            cur.execute("DELETE FROM hanchan_results WHERE hanchan_id = ?", (hanchan_id,))
-        cur.execute("DELETE FROM hanchans WHERE session_id = ?", (session_id,))
-        cur.execute("DELETE FROM session_players WHERE session_id = ?", (session_id,))
-        cur.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-        conn.commit()
+            conn.execute(
+                text("DELETE FROM hanchan_results WHERE hanchan_id = :hanchan_id"),
+                {"hanchan_id": int(hanchan_id)},
+            )
+
+        conn.execute(
+            text("DELETE FROM hanchans WHERE session_id = :session_id"),
+            {"session_id": int(session_id)},
+        )
+        conn.execute(
+            text("DELETE FROM session_players WHERE session_id = :session_id"),
+            {"session_id": int(session_id)},
+        )
+        conn.execute(
+            text("DELETE FROM sessions WHERE id = :session_id"),
+            {"session_id": int(session_id)},
+        )
 
 
 def get_sessions():
@@ -273,9 +319,9 @@ def get_session_detail(session_id):
             r.uma_1, r.uma_2, r.uma_3, r.uma_4, r.has_hakoshita
         FROM sessions s
         JOIN rules r ON s.rule_id = r.id
-        WHERE s.id = ?
+        WHERE s.id = :session_id
         """,
-        (session_id,),
+        {"session_id": int(session_id)},
     )
 
 
@@ -286,17 +332,17 @@ def get_session_players(session_id):
             sp.seat_no, p.id AS player_id, p.name
         FROM session_players sp
         JOIN players p ON sp.player_id = p.id
-        WHERE sp.session_id = ?
+        WHERE sp.session_id = :session_id
         ORDER BY sp.seat_no ASC
         """,
-        (session_id,),
+        {"session_id": int(session_id)},
     )
 
 
 def get_next_hanchan_no(session_id):
     df = fetch_dataframe(
-        "SELECT COALESCE(MAX(hanchan_no), 0) AS max_no FROM hanchans WHERE session_id = ?",
-        (session_id,),
+        "SELECT COALESCE(MAX(hanchan_no), 0) AS max_no FROM hanchans WHERE session_id = :session_id",
+        {"session_id": int(session_id)},
     )
     return int(df.iloc[0]["max_no"]) + 1
 
@@ -325,7 +371,6 @@ def calculate_settlements_bottom_up(final_scores, rule_row):
 
     uma_values = [0.0, 0.0, 0.0, 0.0]
 
-    # 通常
     if (
         len(position_to_indices[1]) == 1
         and len(position_to_indices[2]) == 1
@@ -337,7 +382,6 @@ def calculate_settlements_bottom_up(final_scores, rule_row):
             i = position_to_indices[pos][0]
             uma_values[i] = only_map[pos]
 
-    # 1位2位同着
     elif len(position_to_indices[1]) == 2 and len(position_to_indices[3]) == 1 and len(position_to_indices[4]) == 1:
         split_top = (uma1 + uma2 + oka) / 2.0
         for i in position_to_indices[1]:
@@ -345,14 +389,12 @@ def calculate_settlements_bottom_up(final_scores, rule_row):
         uma_values[position_to_indices[3][0]] = uma3
         uma_values[position_to_indices[4][0]] = uma4
 
-    # 2位3位同着
     elif len(position_to_indices[1]) == 1 and len(position_to_indices[2]) == 2 and len(position_to_indices[4]) == 1:
         uma_values[position_to_indices[1][0]] = uma1 + oka
         for i in position_to_indices[2]:
             uma_values[i] = 0.0
         uma_values[position_to_indices[4][0]] = uma4
 
-    # 3位4位同着
     elif len(position_to_indices[1]) == 1 and len(position_to_indices[2]) == 1 and len(position_to_indices[3]) == 2:
         uma_values[position_to_indices[1][0]] = uma1 + oka
         uma_values[position_to_indices[2][0]] = uma2
@@ -360,7 +402,6 @@ def calculate_settlements_bottom_up(final_scores, rule_row):
         for i in position_to_indices[3]:
             uma_values[i] = split_bottom
 
-    # その他
     else:
         for pos in [4, 3, 2]:
             targets = position_to_indices[pos]
@@ -438,30 +479,40 @@ def add_hanchan_result(session_id, final_scores):
     preview_df, _ = build_hanchan_preview(session_id, final_scores)
     hanchan_no = get_next_hanchan_no(session_id)
 
-    with closing(get_connection()) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO hanchans (session_id, hanchan_no) VALUES (?, ?)",
-            (session_id, hanchan_no),
+    engine = get_engine()
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                INSERT INTO hanchans (session_id, hanchan_no)
+                VALUES (:session_id, :hanchan_no)
+                RETURNING id
+                """
+            ),
+            {
+                "session_id": int(session_id),
+                "hanchan_no": int(hanchan_no),
+            },
         )
-        hanchan_id = cur.lastrowid
+        hanchan_id = int(result.scalar_one())
 
         player_map = dict(zip(players_df["name"], players_df["player_id"]))
         for _, row in preview_df.iterrows():
-            cur.execute(
-                """
-                INSERT INTO hanchan_results (hanchan_id, player_id, final_score, rank, settlement)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    hanchan_id,
-                    int(player_map[row["プレイヤー"]]),
-                    int(row["点数"]),
-                    int(row["順位"]),
-                    float(row["精算"]),
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO hanchan_results (hanchan_id, player_id, final_score, rank, settlement)
+                    VALUES (:hanchan_id, :player_id, :final_score, :rank, :settlement)
+                    """
                 ),
+                {
+                    "hanchan_id": hanchan_id,
+                    "player_id": int(player_map[row["プレイヤー"]]),
+                    "final_score": int(row["点数"]),
+                    "rank": int(row["順位"]),
+                    "settlement": float(row["精算"]),
+                },
             )
-        conn.commit()
 
 
 def update_hanchan_result(session_id, hanchan_no, final_scores):
@@ -471,35 +522,48 @@ def update_hanchan_result(session_id, hanchan_no, final_scores):
 
     preview_df, _ = build_hanchan_preview(session_id, final_scores)
 
-    with closing(get_connection()) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT id FROM hanchans WHERE session_id = ? AND hanchan_no = ?",
-            (session_id, hanchan_no),
-        )
-        row = cur.fetchone()
+    engine = get_engine()
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                """
+                SELECT id FROM hanchans
+                WHERE session_id = :session_id AND hanchan_no = :hanchan_no
+                """
+            ),
+            {
+                "session_id": int(session_id),
+                "hanchan_no": int(hanchan_no),
+            },
+        ).fetchone()
+
         if not row:
             raise ValueError("修正する半荘が見つかりません。")
-        hanchan_id = row[0]
 
-        cur.execute("DELETE FROM hanchan_results WHERE hanchan_id = ?", (hanchan_id,))
+        hanchan_id = int(row[0])
+
+        conn.execute(
+            text("DELETE FROM hanchan_results WHERE hanchan_id = :hanchan_id"),
+            {"hanchan_id": hanchan_id},
+        )
 
         player_map = dict(zip(players_df["name"], players_df["player_id"]))
         for _, result_row in preview_df.iterrows():
-            cur.execute(
-                """
-                INSERT INTO hanchan_results (hanchan_id, player_id, final_score, rank, settlement)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    hanchan_id,
-                    int(player_map[result_row["プレイヤー"]]),
-                    int(result_row["点数"]),
-                    int(result_row["順位"]),
-                    float(result_row["精算"]),
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO hanchan_results (hanchan_id, player_id, final_score, rank, settlement)
+                    VALUES (:hanchan_id, :player_id, :final_score, :rank, :settlement)
+                    """
                 ),
+                {
+                    "hanchan_id": hanchan_id,
+                    "player_id": int(player_map[result_row["プレイヤー"]]),
+                    "final_score": int(result_row["点数"]),
+                    "rank": int(result_row["順位"]),
+                    "settlement": float(result_row["精算"]),
+                },
             )
-        conn.commit()
 
 
 def get_hanchan_results(session_id):
@@ -510,10 +574,10 @@ def get_hanchan_results(session_id):
         FROM hanchan_results hr
         JOIN hanchans h ON hr.hanchan_id = h.id
         JOIN players p ON hr.player_id = p.id
-        WHERE h.session_id = ?
+        WHERE h.session_id = :session_id
         ORDER BY h.hanchan_no DESC, hr.rank ASC
         """,
-        (session_id,),
+        {"session_id": int(session_id)},
     )
 
 
@@ -532,26 +596,26 @@ def get_session_player_totals(session_id):
         FROM hanchan_results hr
         JOIN players p ON hr.player_id = p.id
         JOIN hanchans h ON hr.hanchan_id = h.id
-        WHERE h.session_id = ?
+        WHERE h.session_id = :session_id
         GROUP BY p.id, p.name
         ORDER BY total_settlement DESC, avg_rank ASC
         """,
-        (session_id,),
+        {"session_id": int(session_id)},
     )
 
 
 def get_player_stats(player_name=None, start_date=None, end_date=None):
     conditions = []
-    params = []
+    params = {}
     if player_name:
-        conditions.append("p.name = ?")
-        params.append(player_name)
+        conditions.append("p.name = :player_name")
+        params["player_name"] = player_name
     if start_date:
-        conditions.append("s.session_date >= ?")
-        params.append(start_date)
+        conditions.append("s.session_date >= :start_date")
+        params["start_date"] = start_date
     if end_date:
-        conditions.append("s.session_date <= ?")
-        params.append(end_date)
+        conditions.append("s.session_date <= :end_date")
+        params["end_date"] = end_date
 
     where_clause = ""
     if conditions:
@@ -575,7 +639,7 @@ def get_player_stats(player_name=None, start_date=None, end_date=None):
         GROUP BY p.id, p.name
         ORDER BY total_settlement DESC, avg_rank ASC
     """
-    return fetch_dataframe(query, tuple(params))
+    return fetch_dataframe(query, params)
 
 
 def get_session_rank_trend(session_id):
@@ -586,10 +650,10 @@ def get_session_rank_trend(session_id):
         FROM hanchan_results hr
         JOIN players p ON hr.player_id = p.id
         JOIN hanchans h ON hr.hanchan_id = h.id
-        WHERE h.session_id = ?
+        WHERE h.session_id = :session_id
         ORDER BY p.name ASC, h.hanchan_no ASC
         """,
-        (session_id,),
+        {"session_id": int(session_id)},
     )
     if df.empty:
         return df
@@ -644,7 +708,7 @@ def make_rank_line_chart(rank_trend_df, title):
 
 def page_home():
     st.title("麻雀成績管理サイト")
-    st.write("スマホから入力できる成績管理サイトです。")
+    st.write("しん作成　ver.1")
 
     players_df = get_players()
     rules_df = get_rules()
@@ -884,6 +948,11 @@ def page_session_input():
                     target_hanchan_df = edit_results_df[edit_results_df["hanchan_no"] == edit_hanchan_no].copy()
                     score_map = dict(zip(target_hanchan_df["name"], target_hanchan_df["final_score"]))
 
+                    for i, fixed_row in fixed_players_df.iterrows():
+                        score_key = f"menu_edit_score_{i}"
+                        if score_key not in st.session_state:
+                            st.session_state[score_key] = int(score_map.get(fixed_row["name"], 25000))
+
                     with st.form("menu_edit_hanchan_form"):
                         edit_scores = []
                         for i, fixed_row in fixed_players_df.iterrows():
@@ -896,11 +965,11 @@ def page_session_input():
                                     key=f"menu_fixed_name_{i}",
                                 )
                             with col2:
+                                score_key = f"menu_edit_score_{i}"
                                 score = st.number_input(
                                     "点数",
-                                    value=int(score_map.get(fixed_row["name"], 25000)),
                                     step=100,
-                                    key=f"menu_edit_score_{i}",
+                                    key=score_key,
                                 )
                                 edit_scores.append(int(score))
 
@@ -943,6 +1012,8 @@ def page_session_input():
                         if menu_save_submitted:
                             update_hanchan_result(int(target_session_id), int(edit_hanchan_no), edit_scores)
                             st.success("半荘結果を修正しました。")
+                            for i in range(4):
+                                st.session_state[f"menu_edit_score_{i}"] = 25000
                             st.rerun()
 
                         if menu_close:
@@ -996,6 +1067,10 @@ def page_session_input():
                     )
                     st.session_state["active_session_id"] = int(session_id)
                     st.session_state["input_mode"] = "input"
+
+                    for i in range(4):
+                        st.session_state[f"fixed_score_{i}"] = 25000
+
                     st.rerun()
                 except ValueError as e:
                     st.error(str(e))
@@ -1010,6 +1085,11 @@ def page_session_input():
         session_detail = get_session_detail(int(session_id)).iloc[0]
         session_players = get_session_players(int(session_id))
 
+        for i, _row in session_players.iterrows():
+            score_key = f"fixed_score_{i}"
+            if score_key not in st.session_state:
+                st.session_state[score_key] = 25000
+
         st.subheader("② 半荘結果を追加")
         st.markdown(
             "**日付:** {}  \n**名前:** {}  \n**ルール:** {}".format(
@@ -1021,7 +1101,7 @@ def page_session_input():
         st.caption("参加者は固定です。変える場合は新しい対局データを作ってください。")
         st.caption("次は第{}半荘です。".format(get_next_hanchan_no(int(session_id))))
 
-        with st.form("add_hanchan_flow", clear_on_submit=True):
+        with st.form("add_hanchan_flow"):
             scores = []
             for i, row in session_players.iterrows():
                 col1, col2 = st.columns([1, 1])
@@ -1033,11 +1113,11 @@ def page_session_input():
                         key=f"fixed_name_{i}",
                     )
                 with col2:
+                    score_key = f"fixed_score_{i}"
                     score = st.number_input(
                         "点数",
-                        value=25000,
                         step=100,
-                        key=f"fixed_score_{i}",
+                        key=score_key,
                     )
                     scores.append(int(score))
 
@@ -1082,6 +1162,10 @@ def page_session_input():
                     st.warning(f"点数合計の差分が {score_diff} のままです。")
                 add_hanchan_result(int(session_id), scores)
                 st.success("半荘結果を追加しました。")
+
+                for i in range(4):
+                    st.session_state[f"fixed_score_{i}"] = 25000
+
                 st.rerun()
 
             if finish_submitted:
