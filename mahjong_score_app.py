@@ -579,8 +579,8 @@ def get_session_player_totals(session_id):
             SUM(CASE WHEN hr.rank = 2 THEN 1 ELSE 0 END) AS second_count,
             SUM(CASE WHEN hr.rank = 3 THEN 1 ELSE 0 END) AS third_count,
             SUM(CASE WHEN hr.rank = 4 THEN 1 ELSE 0 END) AS fourth_count,
-            ROUND(AVG(CAST(hr.rank AS REAL)), 2) AS avg_rank,
-            ROUND(SUM(hr.settlement), 1) AS total_settlement
+            ROUND(AVG(hr.rank)::numeric, 2) AS avg_rank,
+            ROUND(SUM(hr.settlement)::numeric, 1) AS total_settlement
         FROM hanchan_results hr
         JOIN players p ON hr.player_id = p.id
         JOIN hanchans h ON hr.hanchan_id = h.id
@@ -617,8 +617,8 @@ def get_player_stats(player_name=None, start_date=None, end_date=None):
             SUM(CASE WHEN hr.rank = 2 THEN 1 ELSE 0 END) AS second_count,
             SUM(CASE WHEN hr.rank = 3 THEN 1 ELSE 0 END) AS third_count,
             SUM(CASE WHEN hr.rank = 4 THEN 1 ELSE 0 END) AS fourth_count,
-            ROUND(AVG(CAST(hr.rank AS REAL)), 2) AS avg_rank,
-            ROUND(SUM(hr.settlement), 1) AS total_settlement
+            ROUND(AVG(hr.rank)::numeric, 2) AS avg_rank,
+            ROUND(SUM(hr.settlement)::numeric, 1) AS total_settlement
         FROM players p
         LEFT JOIN hanchan_results hr ON p.id = hr.player_id
         LEFT JOIN hanchans h ON hr.hanchan_id = h.id
@@ -628,7 +628,6 @@ def get_player_stats(player_name=None, start_date=None, end_date=None):
         ORDER BY total_settlement DESC, avg_rank ASC
     """
     return fetch_dataframe(query, params)
-
 
 def get_session_rank_trend(session_id):
     df = fetch_dataframe(
